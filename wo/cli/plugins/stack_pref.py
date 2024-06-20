@@ -5,7 +5,6 @@ import shutil
 import string
 
 import psutil
-import requests
 from wo.core.apt_repo import WORepo
 from wo.core.aptget import WOAptGet
 from wo.core.cron import WOCron
@@ -30,10 +29,10 @@ def pre_pref(self, apt_packages):
 
     if ("mariadb-server" in apt_packages or "mariadb-client" in apt_packages):
         # add mariadb repository excepted on raspbian and ubuntu 19.04
-        if not (WOVar.wo_distro == 'raspbian') and not (WOVar.wo_platform_codename == 'noble'):
+        if not (WOVar.wo_distro == 'raspbian'):
             Log.info(self, "Adding repository for MySQL, please wait...")
             mysql_pref = (
-                "Package: *\nPin: origin mariadb.mirrors.ovh.net"
+                "Package: *\nPin: origin  deb.mariadb.org"
                 "\nPin-Priority: 1000\n")
             with open('/etc/apt/preferences.d/'
                       'MariaDB.pref', 'w') as mysql_pref_file:
@@ -41,20 +40,13 @@ def pre_pref(self, apt_packages):
             if self.app.config.has_section('mariadb'):
                 mariadb_ver = self.app.config.get(
                     'mariadb', 'release')
-                wo_mysql_repo_conf = ("deb [arch=amd64,arm64,ppc64el] "
-                                      "http://mariadb.mirrors.ovh.net/MariaDB/repo/"
-                                      "{version}/{distro} {codename} main"
-                                      .format(version=mariadb_ver,
-                                              distro=WOVar.wo_distro,
-                                              codename=WOVar.wo_platform_codename))
+                wo_mysql_repo_conf = ("deb [signed-by=/etc/apt/keyrings/mariadb-keyring.pgp] "
+                                      "https://deb.mariadb.org/"
+                                      f"{mariadb_ver}/{WOVar.wo_distro} {WOVar.wo_platform_codename} main")
             else:
                 wo_mysql_repo_conf = WOVar.wo_mysql_repo
             # APT repositories
-            WORepo.add(self, repo_url=wo_mysql_repo_conf)
-            WORepo.add_key(self, '0xcbcb082a1bb943db',
-                           keyserver='keyserver.ubuntu.com')
-            WORepo.add_key(self, '0xF1656F24C74CD1D8',
-                           keyserver='keyserver.ubuntu.com')
+            WORepo.add(self, repo_url=wo_mysql_repo_conf, repo_name="mariadb")
     if ("mariadb-server" in apt_packages and
             not os.path.exists('/etc/mysql/conf.d/my.cnf')):
         # generate random 24 characters root password
@@ -81,13 +73,10 @@ def pre_pref(self, apt_packages):
             WORepo.add(self, ppa=WOVar.wo_nginx_repo)
             Log.debug(self, 'Adding ppa for Nginx')
         else:
-            if not WOFileUtils.grepcheck(
-                    self, '/etc/apt/sources.list/wo-repo.list',
-                    'WordOps'):
+            if not os.path.exists('/etc/apt/sources.list.d/wordops.list'):
                 Log.info(self, "Adding repository for NGINX, please wait...")
                 Log.debug(self, 'Adding repository for Nginx')
-                WORepo.add(self, repo_url=WOVar.wo_nginx_repo)
-            WORepo.add_key(self, WOVar.wo_nginx_key)
+                WORepo.add(self, repo_url=WOVar.wo_nginx_repo, repo_name="wordops")
 
     # add php repository
     if (('php7.3-fpm' in apt_packages) or
@@ -112,34 +101,15 @@ def pre_pref(self, apt_packages):
                         'PHP.pref', mode='w',
                         encoding='utf-8') as php_pref_file:
                     php_pref_file.write(php_pref)
-            if not WOFileUtils.grepcheck(
-                    self, '/etc/apt/sources.list.d/wo-repo.list',
-                    'packages.sury.org'):
+            if not os.path.exists('/etc/apt/sources.list.d/php.list'):
                 Log.debug(self, 'Adding repo_url of php for debian')
                 Log.info(self, "Adding repository for PHP, please wait...")
-                WORepo.add(self, repo_url=WOVar.wo_php_repo)
-            Log.debug(self, 'Adding deb.sury GPG key')
-            WORepo.add_key(self, WOVar.wo_php_key)
+                WORepo.add(self, repo_url=WOVar.wo_php_repo, repo_name="php")
+
     # add redis repository
     if set(WOVar.wo_redis).issubset(set(apt_packages)):
-        if not WOFileUtils.grepcheck(
-                self, '/etc/apt/sources.list/wo-repo.list',
-                'redis.io') and not (WOVar.wo_platform_codename == 'noble'):
-            Log.info(self, "Adding repository for Redis, please wait...")
-            WORepo.add(self, repo_url=WOVar.wo_redis_repo)
-            WORepo.download_key(self, WOVar.wo_redis_key_url)
-
-    # nano
-    if 'nano' in apt_packages:
-        if WOVar.wo_platform_codename == 'buster':
-            if (not WOFileUtils.grepcheck(
-                    self, '/etc/apt/sources.list/wo-repo.list',
-                    'WordOps')):
-                Log.info(self,
-                         "Adding repository for Nano, please wait...")
-                Log.debug(self, 'Adding repository for Nano')
-                WORepo.add_key(self, WOVar.wo_nginx_key)
-                WORepo.add(self, repo_url=WOVar.wo_nginx_repo)
+        if not os.path.exists('/etc/apt/sources.list.d/redis.list'):
+            WORepo.add(self, repo_url=WOVar.wo_redis_repo, repo_name="redis")
 
 
 def post_pref(self, apt_packages, packages, upgrade=False):
@@ -156,7 +126,7 @@ def post_pref(self, apt_packages, packages, upgrade=False):
             data = dict(tls13=True, release=WOVar.wo_version)
             WOTemplate.deploy(self,
                               '/etc/nginx/nginx.conf',
-                              'nginx-core.mustache', data)
+                              'nginx-core.mustache', data, overwrite=True)
 
             if not os.path.isfile('{0}/gzip.conf.disabled'.format(ngxcnf)):
                 data = dict(release=WOVar.wo_version)
@@ -179,6 +149,19 @@ def post_pref(self, apt_packages, packages, upgrade=False):
                           encoding='utf-8', mode='a') as wo_nginx:
                     wo_nginx.write('fastcgi_param \tSCRIPT_FILENAME '
                                    '\t$request_filename;\n')
+            if not WOFileUtils.grep(self, '/etc/nginx/fastcgi_params',
+                                    'HTTP_HOST'):
+                WOFileUtils.textappend(self, '/etc/nginx/fastcgi_params',
+                                       '# Fix for HTTP/3 QUIC HTTP_HOST\n'
+                                       'fastcgi_param\tHTTP_HOST\t$host;\n')
+            if not WOFileUtils.grep(self, '/etc/nginx/proxy_params',
+                                    'X-Forwarded-Host'):
+                WOFileUtils.textappend(self, '/etc/nginx/proxy_params',
+                                       'proxy_set_header X-Forwarded-Host $host;\n')
+            if not WOFileUtils.grep(self, '/etc/nginx/proxy_params',
+                                    'X-Forwarded-Port'):
+                WOFileUtils.textappend(self, '/etc/nginx/proxy_params',
+                                       'proxy_set_header X-Forwarded-Port $server_port;\n')
             try:
                 data = dict(php="9000", debug="9001",
                             php7="9070", debug7="9170",
@@ -275,7 +258,7 @@ def post_pref(self, apt_packages, packages, upgrade=False):
                         "$upstream_response_time "
                         "$srcache_fetch_status "
                         "[$time_local] '\n"
-                        "'$http_host \"$request\" $status"
+                        "'$host \"$request\" $status"
                         " $body_bytes_sent '\n"
                         "'\"$http_referer\" "
                         "\"$http_user_agent\"';\n")
@@ -418,8 +401,8 @@ def post_pref(self, apt_packages, packages, upgrade=False):
                                             "Name: WordOps"] +
                                 ["HTTP Auth Password : {0}"
                                  .format(passwd)])
-                    self.msg = (self.msg + [f'WordOps backend is available on https://{server_ip}:22222]) '
-                                            'or https://{WOVar.wo_fqdn}:22222'])
+                    self.msg = (self.msg + [f'WordOps backend is available on https://{server_ip}:22222 '
+                                            f'or https://{WOVar.wo_fqdn}:22222'])
 
             data = dict(release=WOVar.wo_version)
             WOTemplate.deploy(self, '/opt/cf-update.sh',
@@ -646,7 +629,8 @@ def post_pref(self, apt_packages, packages, upgrade=False):
                                              .format(php_version[0])):
                 WOGit.rollback(self, ["/etc/php"], msg="Rollback PHP")
             else:
-                Log.valide(self, "Configuring php{0}-fpm".format(php_version[0]))
+                Log.valide(
+                    self, "Configuring php{0}-fpm".format(php_version[0]))
                 WOGit.add(self, ["/etc/php"], msg="Adding PHP into Git")
 
             if os.path.exists('/etc/nginx/conf.d/upstream.conf'):
@@ -913,7 +897,7 @@ def post_pref(self, apt_packages, packages, upgrade=False):
                             "# Log format Settings\n"
                             "log_format rt_cache_redis '$remote_addr "
                             "$upstream_response_time $srcache_fetch_status "
-                            "[$time_local] '\n '$http_host \"$request\" "
+                            "[$time_local] '\n '$host \"$request\" "
                             "$status $body_bytes_sent '\n'\"$http_referer\" "
                             "\"$http_user_agent\"';\n")
             # set redis.conf parameter
@@ -1152,25 +1136,18 @@ def post_pref(self, apt_packages, packages, upgrade=False):
             Log.wait(self, "Installing Netdata")
             WOShellExec.cmd_exec(
                 self, "bash /var/lib/wo/tmp/kickstart.sh "
-                "--dont-wait --no-updates --stable-channel "
-                "--reinstall-even-if-unsafe",
+                "--dont-wait --stable-channel",
                 errormsg='', log=False)
             Log.valide(self, "Installing Netdata")
 
             # disable mail notifications
-            if os.path.isdir('/usr/lib/netdata/conf.d/health_alarm_notify.conf'):
+            if os.path.exists('/usr/lib/netdata/conf.d/health_alarm_notify.conf'):
                 WOFileUtils.searchreplace(
                     self, "/usr/lib/netdata/conf.d/health_alarm_notify.conf",
                     'SEND_EMAIL="YES"',
                     'SEND_EMAIL="NO"')
 
-            if os.path.isdir('/opt/netdata/etc/netdata/health_alarm_notify.conf'):
-                WOFileUtils.searchreplace(
-                    self, "/opt/netdata/etc/netdata/health_alarm_notify.conf",
-                    'SEND_EMAIL="YES"',
-                    'SEND_EMAIL="NO"')
-
-            if os.path.isdir('/etc/netdata/orig/health_alarm_notify.conf'):
+            if os.path.exists('/etc/netdata/orig/health_alarm_notify.conf'):
                 WOFileUtils.searchreplace(
                     self, "/etc/netdata/orig/health_alarm_notify.conf",
                     'SEND_EMAIL="YES"',
@@ -1180,7 +1157,7 @@ def post_pref(self, apt_packages, packages, upgrade=False):
             else:
                 wo_grant_host = 'localhost'
             # check if mysql credentials are available
-            if (WOShellExec.cmd_exec(self, "mysqladmin ping")
+            if (WOMysql.mariadb_ping(self)
                     and wo_grant_host == 'localhost'):
                 try:
                     WOMysql.execute(

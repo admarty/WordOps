@@ -196,8 +196,8 @@ class WOSiteUpdateController(CementBaseController):
 
         if ((pargs.password or pargs.hsts or
              pargs.ngxblocker or pargs.letsencrypt == 'renew') and not (
-            pargs.html or pargs.php or pargs.php72 or pargs.php73 or
-            pargs.php74 or pargs.php80 or pargs.php81 or pargs.php82 or
+            pargs.html or pargs.php or pargs.php74 or pargs.php80 or
+            pargs.php81 or pargs.php82 or
             pargs.php83 or pargs.mysql or pargs.wp or pargs.wpfc or pargs.wpsc or
             pargs.wprocket or pargs.wpce or
                 pargs.wpsubdir or pargs.wpsubdomain)):
@@ -222,8 +222,9 @@ class WOSiteUpdateController(CementBaseController):
                     Log.error(
                         self, "service nginx reload failed. "
                         "check issues with `nginx -t` command")
-
-            # setup ngxblocker
+                else:
+                    return 0
+                    # setup ngxblocker
             if (pargs.ngxblocker):
                 if pargs.ngxblocker == "on":
                     if os.path.isdir('/etc/nginx/bots.d'):
@@ -245,6 +246,8 @@ class WOSiteUpdateController(CementBaseController):
                 if not WOService.reload_service(self, 'nginx'):
                     Log.error(self, "service nginx reload failed. "
                               "check issues with `nginx -t` command")
+                else:
+                    return 0
 
             # letsencryot rebew
             if (pargs.letsencrypt == 'renew'):
@@ -264,20 +267,18 @@ class WOSiteUpdateController(CementBaseController):
                 return 0
 
         if (((stype == 'php' and
-              oldsitetype not in ['html', 'proxy', 'php', 'php72',
-                                  'php73', 'php74', 'php80',
+              oldsitetype not in ['html', 'proxy', 'php', 'php74', 'php80',
                                   'php81', 'php82', 'php83']) or
              (stype == 'mysql' and oldsitetype not in [
-                 'html', 'php', 'php72', 'php73', 'php74', 'php80', 'php81',
+                 'html', 'php', 'php74', 'php80', 'php81',
                  'php82', 'php83', 'proxy']) or
              (stype == 'wp' and oldsitetype not in [
-                 'html', 'php', 'php72', 'php73', 'php74', 'php80', 'php81',
+                 'html', 'php', 'php74', 'php80', 'php81',
                  'php82', 'php83', 'mysql', 'proxy', 'wp']) or
              (stype == 'wpsubdir' and oldsitetype in ['wpsubdomain']) or
              (stype == 'wpsubdomain' and oldsitetype in ['wpsubdir']) or
              (stype == oldsitetype and cache == oldcachetype)) and
-                not (pargs.php72 or pargs.php73 or
-                     pargs.php74 or pargs.php80 or
+                not (pargs.php74 or pargs.php80 or
                      pargs.php81 or pargs.php82 or
                      pargs.php83 or pargs.alias)):
             Log.info(self, Log.FAIL + "can not update {0} {1} to {2} {3}".
@@ -336,8 +337,7 @@ class WOSiteUpdateController(CementBaseController):
             data = dict(
                 site_name=wo_domain, www_domain=wo_www_domain,
                 static=False, basic=True, wp=False, wpfc=False,
-                php72=False, php73=False, php74=False,
-                php80=False, php81=False, php82=False, php83=False,
+                php74=False, php80=False, php81=False, php82=False, php83=False,
                 wpsc=False, wpredis=False, wprocket=False, wpce=False,
                 multisite=False, wpsubdir=False, webroot=wo_site_webroot,
                 currsitetype=oldsitetype, currcachetype=oldcachetype)
@@ -361,11 +361,11 @@ class WOSiteUpdateController(CementBaseController):
                 if stype == 'wpsubdir':
                     data['wpsubdir'] = True
 
-        if ((pargs.php72 or pargs.php73 or pargs.php74 or
-             pargs.php80 or pargs.php81 or pargs.php82 or pargs.php83) and
+        if ((pargs.php74 or pargs.php80 or pargs.php81 or
+             pargs.php82 or pargs.php83) and
                 (not data)):
             Log.debug(
-                self, "pargs php72, or php73, or php74, "
+                self, "pargs php74, "
                 "or php80, or php81 or php82 or php83 enabled")
             data = dict(
                 site_name=wo_domain,
@@ -433,8 +433,7 @@ class WOSiteUpdateController(CementBaseController):
                         self, f"PHP {version} is already enabled for given site")
                     setattr(pargs, pargs_version, False)
 
-            if (data and (not pargs.php73) and
-                (not pargs.php74) and (not pargs.php72) and
+            if (data and (not pargs.php74) and
                     (not pargs.php80) and (not pargs.php81) and (not pargs.php82)
                     and (not pargs.php83)):
                 data[pargs_version] = bool(old_version_var is True)
@@ -535,12 +534,6 @@ class WOSiteUpdateController(CementBaseController):
                 check_php_version = version
                 Log.debug(self, f"check_php_versions set to {version}")
                 break
-
-        if pargs.hsts:
-            data['hsts'] = bool(pargs.hsts == "on")
-
-        if pargs.ngxblocker:
-            ngxblocker = bool(pargs.ngxblocker == 'on')
 
         if not data:
             Log.error(self, "Cannot update {0}, Invalid Options"
@@ -753,53 +746,6 @@ class WOSiteUpdateController(CementBaseController):
                       .format(wo_domain))
             updateSiteInfo(self, wo_domain, ssl=letsencrypt)
             return 0
-
-        if pargs.hsts:
-            if data['hsts'] is True:
-                if os.path.isfile(("{0}/conf/nginx/ssl.conf")
-                                  .format(wo_site_webroot)):
-                    if not os.path.isfile("{0}/conf/nginx/hsts.conf"
-                                          .format(wo_site_webroot)):
-                        SSL.setuphsts(self, wo_domain)
-                    else:
-                        Log.error(self, "HSTS is already configured for given "
-                                        "site")
-                    if not WOService.reload_service(self, 'nginx'):
-                        Log.error(self, "service nginx reload failed. "
-                                  "check issues with `nginx -t` command")
-                else:
-                    Log.error(self, "HTTPS is not configured for given "
-                              "site")
-
-            elif data['hsts'] is False:
-                if os.path.isfile(("{0}/conf/nginx/hsts.conf")
-                                  .format(wo_site_webroot)):
-                    WOFileUtils.mvfile(self, "{0}/conf/nginx/hsts.conf"
-                                       .format(wo_site_webroot),
-                                       '{0}/conf/nginx/hsts.conf.disabled'
-                                       .format(wo_site_webroot))
-                    if not WOService.reload_service(self, 'nginx'):
-                        Log.error(self, "service nginx reload failed. "
-                                  "check issues with `nginx -t` command")
-                else:
-                    Log.error(self, "HSTS is not configured for given "
-                              "site")
-        if pargs.ngxblocker:
-            if ngxblocker is True:
-                setupngxblocker(self, wo_domain)
-            elif ngxblocker is False:
-                if os.path.isfile("{0}/conf/nginx/ngxblocker.conf"
-                                  .format(wo_site_webroot)):
-                    WOFileUtils.mvfile(
-                        self,
-                        "{0}/conf/nginx/ngxblocker.conf"
-                        .format(wo_site_webroot),
-                        "{0}/conf/nginx/ngxblocker.conf.disabled"
-                        .format(wo_site_webroot))
-            # Service Nginx Reload
-            if not WOService.reload_service(self, 'nginx'):
-                Log.error(self, "service nginx reload failed. "
-                          "check issues with `nginx -t` command")
 
         if stype == oldsitetype and cache == oldcachetype:
 

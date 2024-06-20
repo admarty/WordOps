@@ -1,3 +1,5 @@
+import os
+import re
 from cement.core.controller import CementBaseController, expose
 
 from wo.cli.plugins.stack_pref import post_pref, pre_pref
@@ -7,7 +9,9 @@ from wo.core.logging import Log
 from wo.core.mysql import WOMysql
 from wo.core.shellexec import WOShellExec
 from wo.core.variables import WOVar
-from wo.core.apt_repo import WORepo
+from wo.cli.plugins.sitedb import (getAllsites)
+from wo.core.template import WOTemplate
+from wo.core.domainvalidate import WODomain
 
 
 class WOStackMigrateController(CementBaseController):
@@ -19,6 +23,9 @@ class WOStackMigrateController(CementBaseController):
         arguments = [
             (['--mariadb'],
                 dict(help="Migrate/Upgrade database to MariaDB",
+                     action='store_true')),
+            (['--nginx'],
+                dict(help="Migrate Nginx TLS configuration to HTTP/3 QUIC",
                      action='store_true')),
             (['--force'],
                 dict(help="Force Packages upgrade without any prompt",
@@ -32,21 +39,29 @@ class WOStackMigrateController(CementBaseController):
     @expose(hide=True)
     def migrate_mariadb(self, ci=False):
 
-        if WOShellExec.cmd_exec(self, 'mysqladmin ping'):
-            # Backup all database
-            WOMysql.backupAll(self, fulldump=True)
-        else:
-            Log.error(self, "Unable to connect to MariaDB")
+        # Backup all database
+        WOMysql.backupAll(self, fulldump=True)
 
         # Check current MariaDB version
-        wo_mysql_current_repo = WOFileUtils.grep(
-            self, '/etc/apt/sources.list.d/wo-repo.list', 'mariadb')
+        if (os.path.exists('/etc/apt/sources.list.d/wo-repo.list') and
+                WOFileUtils.grepcheck(self, "/etc/apt/sources.list.d/wo-repo.list", "mariadb")):
+            wo_mysql_current_repo = WOFileUtils.grep(
+                self, '/etc/apt/sources.list.d/wo-repo.list', 'mariadb')
+            repo_path = '/etc/apt/sources.list.d/wo-repo.list'
+        elif (os.path.exists('/etc/apt/sources.list.d/mariadb.list') and
+              WOFileUtils.grepcheck(self, '/etc/apt/sources.list.d/mariadb.list', "mariadb")):
+            wo_mysql_current_repo = WOFileUtils.grep(
+                self, '/etc/apt/sources.list.d/mariadb.list', 'mariadb')
+            repo_path = '/etc/apt/sources.list.d/mariadb.list'
+
         if wo_mysql_current_repo:
-            current_mysql_version = wo_mysql_current_repo.split('/')
+            Log.debug(self, "Looking for MariaDB version")
+            pattern = r"/(\d+\.\d+)/"
+            match = re.search(pattern, wo_mysql_current_repo)
+            current_mysql_version = match.group(1)
+            Log.debug(self, f"Current MariaDB version is {current_mysql_version}")
         else:
             Log.error(self, "MariaDB is not installed from repository yet")
-        if 'repo' in current_mysql_version:
-            current_mysql_version = current_mysql_version[5]
 
         if self.app.config.has_section('mariadb'):
             mariadb_release = self.app.config.get(
@@ -60,17 +75,7 @@ class WOStackMigrateController(CementBaseController):
                      "MariaDB version available")
             return 0
 
-        wo_old_mysql_repo = ("deb [arch=amd64,arm64,ppc64el] "
-                             "http://mariadb.mirrors.ovh.net/MariaDB/repo/"
-                             "{version}/{distro} {codename} main"
-                             .format(version=current_mysql_version,
-                                     distro=WOVar.wo_distro,
-                                     codename=WOVar.wo_platform_codename))
-
-        if WOFileUtils.grepcheck(
-                self, '/etc/apt/sources.list.d/wo-repo.list',
-                wo_old_mysql_repo):
-            WORepo.remove(self, repo_url=wo_old_mysql_repo)
+        WOFileUtils.rm(self, repo_path)
         # Add MariaDB repo
         pre_pref(self, WOVar.wo_mysql)
 
@@ -97,9 +102,46 @@ class WOStackMigrateController(CementBaseController):
         post_pref(self, WOVar.wo_mysql, [])
 
     @expose(hide=True)
+    def migrate_nginx(self):
+
+        # Add Nginx repo
+        pre_pref(self, WOVar.wo_nginx)
+        # Install Nginx
+        Log.wait(self, "Updating apt-cache          ")
+        WOAptGet.update(self)
+        Log.valide(self, "Updating apt-cache          ")
+        Log.wait(self, "Upgrading Nginx          ")
+        if WOAptGet.install(self, WOVar.wo_nginx):
+            Log.valide(self, "Upgrading Nginx          ")
+        else:
+            Log.failed(self, "Upgrading Nginx          ")
+        allsites = getAllsites(self)
+        for site in allsites:
+            if not site:
+                pass
+            if os.path.exists(f'/var/www/{site.sitename}/conf/nginx/ssl.conf'):
+                if not os.path.islink(f'/var/www/{site.sitename}/conf/nginx/ssl.conf'):
+                    data = dict(ssl_live_path=WOVar.wo_ssl_live,
+                                domain=site.sitename, quic=True)
+                    WOTemplate.deploy(
+                        self, f'/var/www/{site.sitename}/conf/nginx/ssl.conf',
+                        'ssl.mustache', data, overwrite=True)
+                else:
+                    (_, wo_root_domain) = WODomain.getlevel(
+                        self, site.sitename)
+                    if (site.sitename != wo_root_domain and
+                            os.path.exists(f'/etc/letsencrypt/shared/{wo_root_domain}.conf')):
+                        data = dict(ssl_live_path=WOVar.wo_ssl_live,
+                                    domain=wo_root_domain, quic=True)
+                        WOTemplate.deploy(
+                            self, f'/etc/letsencrypt/shared/{wo_root_domain}.conf',
+                            'ssl.mustache', data, overwrite=True)
+        post_pref(self, WOVar.wo_nginx, [])
+
+    @expose(hide=True)
     def default(self):
         pargs = self.app.pargs
-        if not pargs.mariadb:
+        if not pargs.mariadb and not pargs.nginx:
             self.app.args.print_help()
         if pargs.mariadb:
             if WOVar.wo_distro == 'raspbian':
@@ -108,7 +150,7 @@ class WOStackMigrateController(CementBaseController):
                 Log.error(
                     self, "Remote MySQL server in use, skipping local install")
 
-            if WOShellExec.cmd_exec(self, "mysqladmin ping"):
+            if WOMysql.mariadb_ping(self):
 
                 Log.info(self, "If your database size is big, "
                          "migration may take some time.")
@@ -125,3 +167,8 @@ class WOStackMigrateController(CementBaseController):
             else:
                 Log.error(self, "Your current MySQL is not alive or "
                           "you allready installed MariaDB")
+        if pargs.nginx:
+            if os.path.exists('/usr/sbin/nginx'):
+                self.migrate_nginx()
+            else:
+                Log.error(self, "Unable to connect to MariaDB")

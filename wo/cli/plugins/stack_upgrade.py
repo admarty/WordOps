@@ -12,6 +12,7 @@ from wo.core.logging import Log
 from wo.core.shellexec import WOShellExec
 from wo.core.variables import WOVar
 from wo.core.services import WOService
+from wo.core.mysql import WOMysql
 
 
 class WOStackUpgradeController(CementBaseController):
@@ -101,8 +102,6 @@ class WOStackUpgradeController(CementBaseController):
 
         if pargs.web:
             pargs.nginx = True
-            pargs.php72 = True
-            pargs.php73 = True
             pargs.php74 = True
             pargs.php80 = True
             pargs.php81 = True
@@ -136,8 +135,6 @@ class WOStackUpgradeController(CementBaseController):
                     Log.info(self, "Nginx Stable is not already installed")
 
         wo_vars = {
-            'php72': WOVar.wo_php72,
-            'php73': WOVar.wo_php73,
             'php74': WOVar.wo_php74,
             'php80': WOVar.wo_php80,
             'php81': WOVar.wo_php81,
@@ -156,7 +153,7 @@ class WOStackUpgradeController(CementBaseController):
 
         # mysql
         if pargs.mysql:
-            if WOShellExec.cmd_exec(self, 'mysqladmin ping'):
+            if WOMysql.mariadb_ping(self):
                 apt_packages = apt_packages + ['mariadb-server']
 
         # redis
@@ -172,12 +169,9 @@ class WOStackUpgradeController(CementBaseController):
         # wp-cli
         if pargs.wpcli:
             if os.path.isfile('/usr/local/bin/wp'):
-                packages = packages + [[
-                    "https://github.com/wp-cli/wp-cli/"
-                    "releases/download/v{0}/"
-                    "wp-cli-{0}.phar".format(WOVar.wo_wp_cli),
-                    "/usr/local/bin/wp",
-                    "WP-CLI"]]
+                packages = packages + [[f"{WOVar.wpcli_url}",
+                                        "/usr/local/bin/wp",
+                                        "WP-CLI"]]
             else:
                 Log.info(self, "WPCLI is not installed with WordOps")
 
@@ -187,7 +181,7 @@ class WOStackUpgradeController(CementBaseController):
             if (os.path.isdir('/opt/netdata') or
                     os.path.isdir('/etc/netdata')):
                 packages = packages + [[
-                    'https://my-netdata.io/kickstart.sh',
+                    f"{WOVar.netdata_script_url}",
                     '/var/lib/wo/tmp/kickstart.sh', 'Netdata']]
             else:
                 Log.info(self, 'Netdata is not installed')
@@ -360,6 +354,11 @@ class WOStackUpgradeController(CementBaseController):
                 # Netdata
                 if WOAptGet.is_selected(self, 'Netdata', packages):
                     WOService.stop_service(self, 'netdata')
+                    if os.path.exists('/opt/netdata/usr/libexec/netdata/netdata-uninstaller.sh'):
+                        WOShellExec.cmd_exec(self,
+                                             "/opt/netdata/usr/libexec/"
+                                             "netdata/netdata-uninstaller.sh --yes --force",
+                                             log=False)
                     Log.wait(self, "Upgrading Netdata")
                     # detect static binaries install
                     WOShellExec.cmd_exec(

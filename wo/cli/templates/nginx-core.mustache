@@ -55,6 +55,9 @@ http {
 	proxy_set_header Early-Data $ssl_early_data;
 	ssl_early_data on;
 
+	# enable http/2
+	http2 on;
+
 	ssl_session_timeout 1d;
 	ssl_session_cache shared:SSL:50m;
 	ssl_session_tickets off;
@@ -91,8 +94,8 @@ http {
 
 	# Log format Settings
 	log_format rt_cache '$remote_addr $upstream_response_time $upstream_cache_status [$time_local] '
-	'$http_host "$request" $status $body_bytes_sent '
-	'"$http_referer" "$http_user_agent" "$server_protocol"';
+	'$host "$request" $status $body_bytes_sent '
+	'"$http_referer" "$http_user_agent" "$server_protocol" "$http3"';
 
 	##
 	# Virtual Host Configs

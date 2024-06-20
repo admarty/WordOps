@@ -16,6 +16,8 @@ from wo.core.mysql import WOMysql
 from wo.core.services import WOService
 from wo.core.shellexec import WOShellExec
 from wo.core.variables import WOVar
+from wo.core.nginx import check_config
+from wo.core.git import WOGit
 
 
 def wo_stack_hook(app):
@@ -90,6 +92,9 @@ class WOStackController(CementBaseController):
             (['--nanorc'],
                 dict(help='Install nanorc syntax highlighting',
                      action='store_true')),
+            (['--brotli'],
+                dict(help='Enable/Disable Brotli compression for Nginx',
+                     action='store_true')),
             (['--force'],
                 dict(help='Force install/remove/purge without prompt',
                      action='store_true')),
@@ -125,7 +130,6 @@ class WOStackController(CementBaseController):
             if pargs.all:
                 pargs.web = True
                 pargs.admin = True
-                pargs.php73 = True
                 pargs.php74 = True
                 pargs.php80 = True
                 pargs.php81 = True
@@ -183,8 +187,6 @@ class WOStackController(CementBaseController):
                     Log.debug(self, "Redis already installed")
 
             wo_vars = {
-                'php72': WOVar.wo_php72,
-                'php73': WOVar.wo_php73,
                 'php74': WOVar.wo_php74,
                 'php80': WOVar.wo_php80,
                 'php81': WOVar.wo_php81,
@@ -205,7 +207,7 @@ class WOStackController(CementBaseController):
             if pargs.mysql:
                 pargs.mysqltuner = True
                 Log.debug(self, "Setting apt_packages variable for MySQL")
-                if not WOShellExec.cmd_exec(self, "mysqladmin ping"):
+                if not WOMysql.mariadb_ping(self):
                     apt_packages = apt_packages + WOVar.wo_mysql
                 else:
                     Log.debug(self, "MySQL already installed and alive")
@@ -215,7 +217,7 @@ class WOStackController(CementBaseController):
             if pargs.mysqlclient:
                 Log.debug(self, "Setting apt_packages variable "
                           "for MySQL Client")
-                if not WOShellExec.cmd_exec(self, "mysqladmin ping"):
+                if not WOMysql.mariadb_ping(self):
                     apt_packages = apt_packages + WOVar.wo_mysql_client
                 else:
                     Log.debug(self, "MySQL already installed and alive")
@@ -225,10 +227,7 @@ class WOStackController(CementBaseController):
             if pargs.wpcli:
                 Log.debug(self, "Setting packages variable for WP-CLI")
                 if not WOAptGet.is_exec(self, 'wp'):
-                    packages = packages + [["https://github.com/wp-cli/wp-cli/"
-                                            "releases/download/v{0}/"
-                                            "wp-cli-{0}.phar"
-                                            "".format(WOVar.wo_wp_cli),
+                    packages = packages + [[f"{WOVar.wpcli_url}"
                                             "/usr/local/bin/wp",
                                             "WP-CLI"]]
                 else:
@@ -282,6 +281,27 @@ class WOStackController(CementBaseController):
                 else:
                     Log.debug(self, "ProFTPd already installed")
                     Log.info(self, "ProFTPd already installed")
+
+            # brotli
+            if pargs.brotli:
+                Log.wait(self, "Enabling Brotli")
+                WOGit.add(self, ["/etc/nginx"], msg="Commiting pending changes")
+                if os.path.exists('/etc/nginx/conf.d/brotli.conf.disabled'):
+                    WOFileUtils.mvfile(self, '/etc/nginx/conf.d/brotli.conf.disabled',
+                                       '/etc/nginx/conf.d/brotli.conf')
+                else:
+                    Log.failed(self, "Enabling Brotli")
+                    Log.error(self, "Brotli is already enabled")
+                if os.path.exists('/etc/nginx/conf.d/gzip.conf'):
+                    WOFileUtils.mvfile(self, '/etc/nginx/conf.d/gzip.conf',
+                                       '/etc/nginx/conf.d/gzip.conf.disabled')
+                if check_config(self):
+                    Log.valide(self, "Enabling Brotli")
+                    WOGit.add(self, ["/etc/nginx"], msg="Enabling Brotli")
+                    WOService.reload_service(self, "nginx")
+                else:
+                    Log.failed(self, "Enabling Brotli")
+                    WOGit.rollback(self, ["/etc/nginx"])
 
             # PHPMYADMIN
             if pargs.phpmyadmin:
@@ -373,8 +393,7 @@ class WOStackController(CementBaseController):
                         os.path.isdir("/etc/netdata")):
                     Log.debug(
                         self, "Setting packages variable for Netdata")
-                    packages = packages + [['https://my-netdata.io/'
-                                            'kickstart.sh',
+                    packages = packages + [[f"{WOVar.netdata_script_url}",
                                             '/var/lib/wo/tmp/kickstart.sh',
                                             'Netdata']]
                 else:
@@ -450,7 +469,7 @@ class WOStackController(CementBaseController):
 
             # UTILS
             if pargs.utils:
-                if not WOShellExec.cmd_exec(self, 'mysqladmin ping'):
+                if not WOMysql.mariadb_ping(self):
                     pargs.mysql = True
                 if not (WOAptGet.is_installed(self, 'php7.2-fpm') or
                         WOAptGet.is_installed(self, 'php7.3-fpm') or
@@ -594,8 +613,6 @@ class WOStackController(CementBaseController):
 
         # Create a dictionary that maps PHP versions to corresponding variables.
         wo_vars = {
-            'php72': WOVar.wo_php72,
-            'php73': WOVar.wo_php73,
             'php74': WOVar.wo_php74,
             'php80': WOVar.wo_php80,
             'php81': WOVar.wo_php81,
@@ -637,7 +654,7 @@ class WOStackController(CementBaseController):
         if pargs.mysqlclient:
             Log.debug(self, "Removing apt_packages variable "
                       "for MySQL Client")
-            if WOShellExec.cmd_exec(self, "mysqladmin ping"):
+            if WOMysql.mariadb_ping(self):
                 apt_packages = apt_packages + WOVar.wo_mysql_client
 
         # fail2ban
@@ -663,6 +680,27 @@ class WOStackController(CementBaseController):
             if WOAptGet.is_installed(self, 'proftpd-basic'):
                 Log.debug(self, "Remove apt_packages variable for ProFTPd")
                 apt_packages = apt_packages + ["proftpd-basic"]
+
+        # brotli
+        if pargs.brotli:
+            Log.wait(self, "Disabling Brotli")
+            WOGit.add(self, ["/etc/nginx"], msg="Commiting pending changes")
+            if os.path.exists('/etc/nginx/conf.d/brotli.conf'):
+                WOFileUtils.mvfile(self, '/etc/nginx/conf.d/brotli.conf',
+                                   '/etc/nginx/conf.d/brotli.conf.disabled')
+            else:
+                Log.failed(self, "Disabling Brotli")
+                Log.error(self, "Brotli is already disabled")
+            if os.path.exists('/etc/nginx/conf.d/gzip.conf.disabled'):
+                WOFileUtils.mvfile(self, '/etc/nginx/conf.d/gzip.conf.disabled',
+                                   '/etc/nginx/conf.d/gzip.conf')
+            if check_config(self):
+                Log.valide(self, "Disabling Brotli")
+                WOGit.add(self, ["/etc/nginx"], msg="Disabling Brotli")
+                WOService.reload_service(self, "nginx")
+            else:
+                Log.failed(self, "Disabling Brotli")
+                WOGit.rollback(self, ["/etc/nginx"])
 
         # UFW
         if pargs.ufw:
@@ -805,7 +843,7 @@ class WOStackController(CementBaseController):
                     packages = packages + ["/opt/netdata"]
                 else:
                     Log.debug(self, "Netdata uninstaller not found")
-                if WOShellExec.cmd_exec(self, 'mysqladmin ping'):
+                if WOMysql.mariadb_ping(self):
                     WOMysql.execute(
                         self, "DELETE FROM mysql.user WHERE User = 'netdata';")
 
@@ -855,8 +893,6 @@ class WOStackController(CementBaseController):
         if pargs.all:
             pargs.web = True
             pargs.admin = True
-            pargs.php72 = True
-            pargs.php73 = True
             pargs.php74 = True
             pargs.php80 = True
             pargs.php81 = True
@@ -898,8 +934,6 @@ class WOStackController(CementBaseController):
                 Log.info(self, "Nginx is not installed")
 
         wo_vars = {
-            'php72': WOVar.wo_php72,
-            'php73': WOVar.wo_php73,
             'php74': WOVar.wo_php74,
             'php80': WOVar.wo_php80,
             'php81': WOVar.wo_php81,
@@ -937,7 +971,7 @@ class WOStackController(CementBaseController):
 
         # mysqlclient
         if pargs.mysqlclient:
-            if WOShellExec.cmd_exec(self, "mysqladmin ping"):
+            if WOMysql.mariadb_ping(self):
                 Log.debug(self, "Add MySQL client to apt_packages list")
                 apt_packages = apt_packages + WOVar.wo_mysql_client
 
@@ -1110,7 +1144,7 @@ class WOStackController(CementBaseController):
                     packages = packages + ["/opt/netdata"]
                 else:
                     Log.debug(self, "Netdata uninstaller not found")
-                if WOShellExec.cmd_exec(self, 'mysqladmin ping'):
+                if WOMysql.mariadb_ping(self):
                     WOMysql.execute(
                         self, "DELETE FROM mysql.user WHERE User = 'netdata';")
 

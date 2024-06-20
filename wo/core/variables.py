@@ -15,15 +15,15 @@ class WOVar():
     """Intialization of core variables"""
 
     # WordOps version
-    wo_version = "3.21.0"
+    wo_version = "3.21.3"
     # WordOps packages versions
-    wo_wp_cli = "2.10.0"
     wo_adminer = "4.8.1"
     wo_phpmyadmin = "5.2.0"
     wo_extplorer = "2.1.15"
     wo_dashboard = "1.3"
 
     # Get WPCLI path
+    wpcli_url = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
     wo_wpcli_path = '/usr/local/bin/wp'
 
     # Current date and time of System
@@ -118,41 +118,32 @@ class WOVar():
     # Nginx repo and packages
     if wo_distro == 'ubuntu':
         wo_nginx_repo = "ppa:wordops/nginx-wo"
-        wo_extra_repo = (
-            "deb http://download.opensuse.org"
-            "/repositories/home:/virtubox:"
-            "/WordOps/xUbuntu_{0}/ /".format(wo_platform_version))
+
     else:
         if wo_distro == 'debian':
-            if wo_platform_codename == 'jessie':
-                wo_deb_repo = "Debian_8.0"
-            elif wo_platform_codename == 'stretch':
-                wo_deb_repo = "Debian_9.0"
-            elif wo_platform_codename == 'buster':
+            if wo_platform_codename == 'buster':
                 wo_deb_repo = "Debian_10"
             elif wo_platform_codename == 'bullseye':
                 wo_deb_repo = "Debian_11"
             elif wo_platform_codename == 'bookworm':
                 wo_deb_repo = "Debian_12"
         elif wo_distro == 'raspbian':
-            if wo_platform_codename == 'stretch':
-                wo_deb_repo = "Raspbian_9.0"
-            elif wo_platform_codename == 'buster':
+            if wo_platform_codename == 'buster':
                 wo_deb_repo = "Raspbian_10"
             elif wo_platform_codename == 'bullseye':
                 wo_deb_repo = "Raspbian_11"
+            elif wo_platform_codename == 'bookworm':
+                wo_deb_repo = "Raspbian_12"
         # debian/raspbian nginx repository
-        wo_nginx_repo = ("deb http://download.opensuse.org"
-                         "/repositories/home:"
-                         "/virtubox:/WordOps/{0}/ /"
-                         .format(wo_deb_repo))
+        wo_nginx_repo = ("deb [signed-by=/usr/share/keyrings/wordops-archive-keyring.gpg] "
+                         "http://download.opensuse.org"
+                         f"/repositories/home:/virtubox:/WordOps/{wo_deb_repo}/ /")
+        wo_nginx_key = (f"https://download.opensuse.org/repositories/home:virtubox:WordOps/{wo_deb_repo}/Release.key")
 
     wo_nginx = ["nginx-custom", "nginx-wo"]
     wo_nginx_key = 'FB898660'
 
     wo_php_versions = {
-        'php72': '7.2',
-        'php73': '7.3',
         'php74': '7.4',
         'php80': '8.0',
         'php81': '8.1',
@@ -167,16 +158,12 @@ class WOVar():
                      "xml", "zip"]
         php_modules = ["php{0}-{1}".format(version_number, module) for module in wo_module]
 
-        if version_prefix == 'php72' or version_prefix == 'php73':
-            php_modules.append("php{0}-recode".format(version_number))
-        elif version_prefix == 'php74':
+        if version_prefix == 'php74':
             php_modules.extend(["php{0}-geoip".format(version_number),
                                 "php{0}-json".format(version_number)])
 
         return php_modules
 
-    wo_php72 = generate_php_modules('php72', '7.2')
-    wo_php73 = generate_php_modules('php73', '7.3')
     wo_php74 = generate_php_modules('php74', '7.4')
     wo_php80 = generate_php_modules('php80', '8.0')
     wo_php81 = generate_php_modules('php81', '8.1')
@@ -191,7 +178,7 @@ class WOVar():
     if wo_distro == 'raspbian':
         mariadb_ver = '10.3'
     else:
-        mariadb_ver = '10.11'
+        mariadb_ver = '11.4'
         wo_mysql = wo_mysql + ["mariadb-backup"]
 
     wo_mysql_client = ["mariadb-client", "python3-mysqldb"]
@@ -200,26 +187,27 @@ class WOVar():
     wo_clamav = ["clamav", "clamav-freshclam"]
 
     # APT repositories
-    wo_mysql_repo = ("deb [arch=amd64,arm64,ppc64el] "
-                     "http://mariadb.mirrors.ovh.net/MariaDB/repo/"
-                     "{version}/{distro} {codename} main"
-                     .format(version=mariadb_ver,
-                             distro=wo_distro,
-                             codename=wo_platform_codename))
+    wo_mysql_repo = ("deb [signed-by=/etc/apt/keyrings/mariadb-keyring.pgp] "
+                     "https://deb.mariadb.org/"
+                     f"{mariadb_ver}/{wo_distro} {wo_platform_codename} main")
+    mariadb_repo_key = "https://mariadb.org/mariadb_release_signing_key.pgp"
     if wo_distro == 'ubuntu':
         wo_php_repo = "ppa:ondrej/php"
         wo_goaccess_repo = ("ppa:alex-p/goaccess")
 
     else:
         wo_php_repo = (
-            "deb https://packages.sury.org/php/ {codename} main"
-            .format(codename=wo_platform_codename))
+            "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] "
+            f"https://packages.sury.org/php/ {wo_platform_codename} main")
         wo_php_key = '95BD4743'
     wo_redis_key_url = "https://packages.redis.io/gpg"
-    wo_redis_repo = ("deb https://packages.redis.io/deb {codename} main"
-                     .format(codename=wo_platform_codename))
+    wo_redis_repo = (
+        "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] "
+        f"https://packages.redis.io/deb {wo_platform_codename} main")
 
     wo_redis = ['redis-server']
+
+    netdata_script_url = "https://get.netdata.cloud/kickstart.sh"
 
     # Repo path
     wo_repo_file = "wo-repo.list"

@@ -1,8 +1,6 @@
 import csv
 import os
 
-import requests
-
 from wo.core.fileutils import WOFileUtils
 from wo.core.git import WOGit
 from wo.core.logging import Log
@@ -55,7 +53,7 @@ class WOAcme:
         WOAcme.check_acme(self)
         acme_list = WOShellExec.cmd_exec_stdout(
             self, "{0} ".format(WOAcme.wo_acme_exec) +
-            "--list --listraw")
+            "--list --listraw", log=False)
         if acme_list:
             WOFileUtils.textwrite(self, '/var/lib/wo/cert.csv', acme_list)
             WOFileUtils.chmod(self, '/var/lib/wo/cert.csv', 0o600)
@@ -94,7 +92,7 @@ class WOAcme:
         if not WOShellExec.cmd_exec(
                 self, "{0} ".format(WOAcme.wo_acme_exec) +
                 "--issue -d '{0}' {1} -k {2} -f"
-                .format(all_domains, acme_mode, keylenght)):
+                .format(all_domains, acme_mode, keylenght), log=False):
             Log.failed(self, "Issuing SSL cert with acme.sh")
             if acmedata['dns'] is True:
                 Log.error(
@@ -143,7 +141,7 @@ class WOAcme:
                              .format(wo_domain_name)):
 
                 data = dict(ssl_live_path=WOVar.wo_ssl_live,
-                            domain=wo_domain_name)
+                            domain=wo_domain_name, quic=True)
                 WOTemplate.deploy(self,
                                   '/var/www/{0}/conf/nginx/ssl.conf'
                                   .format(wo_domain_name),
@@ -153,10 +151,10 @@ class WOAcme:
                                     '/etc/letsencrypt'):
                 Log.info(self, "Securing WordOps backend with current cert")
                 data = dict(ssl_live_path=WOVar.wo_ssl_live,
-                            domain=wo_domain_name)
+                            domain=wo_domain_name, quic=False)
                 WOTemplate.deploy(self,
                                   '/var/www/22222/conf/nginx/ssl.conf',
-                                  'ssl.mustache', data, overwrite=False)
+                                  'ssl.mustache', data, overwrite=True)
 
             WOGit.add(self, ["/etc/letsencrypt"],
                       msg="Adding letsencrypt folder")
@@ -174,7 +172,7 @@ class WOAcme:
         try:
             WOShellExec.cmd_exec(
                 self, "{0} ".format(WOAcme.wo_acme_exec) +
-                "--renew -d {0} --ecc --force".format(domain))
+                "--renew -d {0} --ecc --force".format(domain), log=False)
         except CommandExecutionError as e:
             Log.debug(self, str(e))
             Log.error(self, 'Unable to renew certificate')

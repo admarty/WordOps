@@ -9,7 +9,7 @@
 # -------------------------------------------------------------------------
 # wget -qO wo wops.cc && sudo -E bash wo
 # -------------------------------------------------------------------------
-# Version 3.21.0 - 2024-05-03
+# Version 3.21.3 - 2024-06-14
 # -------------------------------------------------------------------------
 
 # CONTENTS
@@ -213,7 +213,6 @@ wo_install_dep() {
             build-essential curl gzip python3-pip python3-apt python3-venv gcc python3-dev sqlite3 git tar software-properties-common pigz \
             gnupg2 cron ccze rsync apt-transport-https tree haveged ufw unattended-upgrades tzdata ntp zstd idn \
             python3-distutils-extra libapt-pkg-dev bash-completion >/dev/null 2>&1
-        curl -sL https://build.opensuse.org/projects/home:virtubox/public_key | apt-key add -
     else
         # install dependencies
         apt-get --option=Dpkg::options::=--force-confmiss --option=Dpkg::options::=--force-confold --assume-yes install \
@@ -221,14 +220,76 @@ wo_install_dep() {
             software-properties-common pigz apt-transport-https gnupg2 cron ccze rsync tree haveged ufw unattended-upgrades tzdata ntp zstd idn \
             python3-distutils-extra libapt-pkg-dev bash-completion >/dev/null 2>&1
         # add php repository gpg key
-        [ -d /etc/apt/trusted.gpg.d ] && { wget -qO /etc/apt/trusted.gpg.d/php.gpg https://packages.sury.org/php/apt.gpg; }
-        # add nginx repository gpg key
-        curl -sL https://build.opensuse.org/projects/home:virtubox/public_key | apt-key add -
+        curl -sSLo /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb
+        dpkg -i /tmp/debsuryorg-archive-keyring.deb && rm -f /tmp/debsuryorg-archive-keyring.deb
     fi
     locale-gen en
     # enable unattended upgades
     if [ ! -f /etc/apt/apt.conf.d/20auto-upgrades ]; then
         cp -f /usr/share/unattended-upgrades/20auto-upgrades /etc/apt/apt.conf.d/20auto-upgrades
+    fi
+}
+
+wo_download_gpg_keys() {
+    local wo_distro_version
+    wo_distro_version=$(lsb_release -rs | grep -oE '[0-9]+')
+    local wo_linux_distro
+    wo_linux_distro=$(lsb_release -is)
+
+    # create directories
+    mkdir -p /usr/share/keyrings /etc/apt/keyrings
+
+    # redis gpg key
+    curl -fsSL https://packages.redis.io/gpg | gpg --dearmor | tee /usr/share/keyrings/redis-archive-keyring.gpg >/dev/null 2>&1
+
+    # mariadb
+    curl -o /etc/apt/keyrings/mariadb-keyring.pgp 'https://mariadb.org/mariadb_release_signing_key.pgp'
+
+    # nginx
+    if [ "$wo_linux_distro" == "Debian" ]; then
+        curl -fsSL "https://download.opensuse.org/repositories/home:virtubox:WordOps/Debian_$wo_distro_version/Release.key" | gpg --dearmor | tee /usr/share/keyrings/wordops-archive-keyring.gpg >/dev/null 2>&1
+    fi
+    if [ "$wo_linux_distro" == "Raspbian" ]; then
+        curl -fsSL "https://download.opensuse.org/repositories/home:virtubox:WordOps/Raspbian_$wo_distro_version/Release.key" | gpg --dearmor | tee /usr/share/keyrings/wordops-archive-keyring.gpg >/dev/null 2>&1
+    fi
+}
+
+wo_update_repo() {
+    local wo_linux_codename
+    wo_linux_codename=$(lsb_release -sc)
+    if [ -f /etc/apt/sources.list.d/wo-repo.list ]; then
+        # properly define sury repository
+        if grep -q sury /etc/apt/sources.list.d/wo-repo.list; then
+            echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $wo_linux_codename main" >/etc/apt/sources.list.d/php.list
+        fi
+        # properly define mariadb repository
+        repo_file="/etc/apt/sources.list.d/wo-repo.list"
+        if grep -q mariadb /etc/apt/sources.list.d/wo-repo.list; then
+            repo_number=$(grep -c "mariadb" "$repo_file")
+            if [ "$repo_number" -gt 1 ]; then
+                get_urls=$(grep "mariadb" "$repo_file" | awk '{print $3}')
+                mariadb_repo=$(echo "$get_urls" | sort -t '/' -k 6,6 -V | tail -n 1)
+            else
+                mariadb_repo=$(grep mariadb /etc/apt/sources.list.d/wo-repo.list | awk '{print $3}')
+            fi
+            echo "deb [signed-by=/etc/apt/keyrings/mariadb-keyring.pgp] $mariadb_repo $wo_linux_codename main" >/etc/apt/sources.list.d/mariadb.list
+        fi
+        # properly define redis repository
+        if grep -q redis /etc/apt/sources.list.d/wo-repo.list; then
+            echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $wo_linux_codename main" >/etc/apt/sources.list.d/redis.list
+        fi
+        # properly define WordOps nginx repository
+        if grep -q WordOps /etc/apt/sources.list.d/wo-repo.list; then
+            wo_repo=$(grep WordOps /etc/apt/sources.list.d/wo-repo.list | awk -F\  '{ print $2 }')
+            echo "deb [signed-by=/usr/share/keyrings/wordops-archive-keyring.gpg] $wo_repo /" >/etc/apt/sources.list.d/wordops.list
+        fi
+        # cleanup wo-repo.list
+        if grep -Eqv "WordOps|mariadb|sury|redis" /etc/apt/sources.list.d/wo-repo.list; then
+            rm -f /etc/apt/sources.list.d/wo-repo.list
+        else
+            clean_wo_repo=$(grep -Ev "WordOps|mariadb|sury|redis" /etc/apt/sources.list.d/wo-repo.list)
+            echo "$clean_wo_repo" >/etc/apt/sources.list.d/wo-repo.list
+        fi
     fi
 }
 
@@ -440,14 +501,14 @@ wo_install() {
         cd /usr/local/lib/python3."$python_ver"/dist-packages || exit 1
     fi
     if [ "$wo_distro_codename" != "bookworm" ]; then
-        /opt/wo/bin/pip uninstall -yq wo wordops ee
+        pip uninstall -yq wo wordops ee
     fi
 
     cd || exit 1
     if [ -d /opt/wo/lib/python3."$python_ver"/site-packages/apt ]; then
         source /opt/wo/bin/activate
         /opt/wo/bin/pip install -U setuptools
-        /opt/wo/bin/pip install -U pip wheel
+        /opt/wo/bin/pip install -U pip wheel distro
         /opt/wo/bin/pip uninstall psutil -y
         /opt/wo/bin/pip uninstall SQLAlchemy -y
     else
@@ -481,9 +542,9 @@ wo_install() {
     fi
 
     if [ "$wo_branch" = "master" ]; then
-        /opt/wo/bin/pip install -U wordops
+        /opt/wo/bin/pip install -U wordops --upgrade-strategy=eager
     else
-        /opt/wo/bin/pip install -I "git+https://github.com/WordOps/WordOps.git@$wo_branch#egg=wordops"
+        /opt/wo/bin/pip install -I "git+https://github.com/WordOps/WordOps.git@$wo_branch#egg=wordops" --upgrade-strategy=eager
     fi
     local python_venv
     python_venv=$(python3 -c "import sys; print(sys.version_info[1])")
@@ -544,9 +605,9 @@ wo_travis_install() {
                 fi
             fi
         fi
-        /opt/wo/bin/pip install -U .
+        /opt/wo/bin/pip install -U . --upgrade-strategy=eager
     else
-        /opt/wo/bin/pip install -U "git+https://github.com/WordOps/WordOps.git@$wo_branch#egg=wordops"
+        /opt/wo/bin/pip install -U "git+https://github.com/WordOps/WordOps.git@$wo_branch#egg=wordops" --upgrade-strategy=eager
     fi
     cp -rf /opt/wo/lib/python3."$python_ver"/site-packages/usr/* /usr/
     cp -rn /opt/wo/lib/python3."$python_ver"/site-packages/etc/* /etc/
@@ -576,10 +637,6 @@ wo_upgrade_nginx() {
     # chec if the package nginx-ee is installed
     CHECK_NGINX_EE=$(dpkg --list | grep nginx-ee)
     CHECK_PHP72=$(command -v php-fpm7.2)
-
-    # add new Nginx repository
-    # import the respository key for updates
-    curl -sL https://build.opensuse.org/projects/home:virtubox/public_key | apt-key add -
 
     # install new nginx package
     if {
@@ -754,15 +811,6 @@ wo_init() {
     ###
 
     if [ -z "$wo_travis" ]; then
-        # import easyengine opensusebuildservice gpg key to avoid issues with packages update
-        apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 3050ac3cd2ae6f03 >/dev/null 2>&1
-        apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 0xF1656F24C74CD1D8 >/dev/null 2>&1
-        apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys cf0b928cded64f3b >/dev/null 2>&1
-        # fix digitalocean mariadb repository issue
-        sed -i 's/sfo1.mirrors.digitalocean.com\/mariadb/mariadb.mirrors.ovh.net\/MariaDB/' /etc/apt/sources.list.d/*.list >/dev/null 2>&1
-        if [ -f /etc/apt/preferences.d/MariaDB.pref ]; then
-            sed -i 's/sfo1.mirrors.digitalocean.com/mariadb.mirrors.ovh.net/' /etc/apt/preferences.d/MariaDB.pref >/dev/null 2>&1
-        fi
         if ! {
             apt-get update --allow-releaseinfo-change -qq >/dev/null 2>&1
         }; then
@@ -777,14 +825,17 @@ wo_init() {
         if ! command_exists jq; then
             apt-get install jq -qq >/dev/null 2>&1
         fi
+        if ! command_exists gpg; then
+            apt-get install gpg -qq >/dev/null 2>&1
+        fi
     fi
     if [ "$wo_force_install" = "y" ]; then
         [ ! -f "$HOME/.gitconfig" ] && { bash -c 'echo -e "[user]\n\tname = $USER\n\temail = root@$HOSTNAME.local" > $HOME/.gitconfig'; }
     fi
     if [ -f ./setup.py ]; then
-        readonly wo_version_new=$(grep "version='" setup.py | awk -F "'" '{print $2}' 2>&1)
+        wo_version_new=$(grep "version='" setup.py | awk -F "'" '{print $2}' 2>&1)
     else
-        readonly wo_version_new=$(curl -m 5 --retry 3 -sL https://api.github.com/repos/WordOps/WordOps/releases/latest 2>&1 | jq -r '.tag_name')
+        wo_version_new=$(curl -m 5 --retry 3 -sL https://api.github.com/repos/WordOps/WordOps/releases/latest 2>&1 | jq -r '.tag_name')
     fi
 
     echo ""
@@ -812,12 +863,13 @@ wo_git_secure_path() {
 
 # create required directories
 wo_dir_init
-# install lsb_release, curl and display header
+# install lsb_release, curl, gpg and display header
 wo_init
 # define main variables
 wo_init_variables
 # remove old repositories
 _run wo_clean_repo
+_run wo_download_gpg_keys
 
 if [ -z "$wo_force_install" ]; then
     # check distribution support
@@ -837,6 +889,7 @@ else
         _run wo_woconf
         _run wo_fix_kernel
         _run wo_php_fix
+        _run wo_update_repo
         # 2 - Migration from EEv3
     else
         if [ -x /usr/local/bin/ee ]; then
@@ -883,6 +936,12 @@ else
         wo_lib_echo "WordOps (wo) upgrade to $wo_version_new was successful!"
         wo_lib_echo "Changelog is available on https://github.com/WordOps/WordOps/releases/tag/$wo_version_new"
         echo
+        version_to_check="v3.21"
+        if echo "$wo_version_new" | grep -q "$version_to_check"; then
+            wo_lib_echo "To upgrade Nginx package and configuration for HTTP/3 QUIC, use the following command"
+            wo_lib_echo_info "wo stack migrate --nginx"
+        fi
+        echo
         wo_lib_echo "To upgrade WordOps web stacks, you can use the command:"
         wo_lib_echo_info "wo stack upgrade"
         echo
@@ -903,7 +962,6 @@ else
     echo
     wo_lib_echo "WordOps Documentation : https://docs.wordops.net"
     wo_lib_echo "WordOps Community Forum : https://community.wordops.net"
-    wo_lib_echo "WordOps Community Chat : https://chat.wordops.net"
     echo
     wo_lib_echo "Give WordOps a GitHub star : https://github.com/WordOps/WordOps/"
     echo
